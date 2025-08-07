@@ -14,7 +14,7 @@ fi
 if [ $# -ne 2 ]; then
   echo "Usage: $0  <Your_email_nickname> <MFA_TOKEN_CODE>"
   echo "Where:"
-  echo "   <Your_email_nickname>  = 이메일 주소 중 @megazone.com 앞 부분을 입력해주세요."
+  echo "   <Your_email_nickname>  = 이메일 주소 중 @ 앞 부분을 입력해주세요."
   echo "   <MFA_TOKEN_CODE>       = Code from virtual MFA device"
   exit 2
 fi
