@@ -11,7 +11,7 @@ fi
 ACCOUNT_ID=$1
 PROFILE=$2
 
-REGISTRATION_CHECK_ACCOUNT=$(cat ~/.aws/config | grep "arn:aws:iam::"$ACCOUNT_ID":role/mzc_solutions_architect" | wc -l)
+REGISTRATION_CHECK_ACCOUNT=$(cat ~/.aws/config | grep "arn:aws:iam::"$ACCOUNT_ID":role/역할이름" | wc -l)
 REGISTRATION_CHECK_NICKNAME=$(cat ~/.aws/config | grep $PROFILE | wc -l)
 
 if [[ $REGISTRATION_CHECK_ACCOUNT -ge 1 ]]; then
@@ -21,7 +21,7 @@ else
     echo "The nickname is already registered in ~/.aws/config file."
   else
     echo "[profile "$PROFILE"]" >> ~/.aws/config
-    echo "role_arn = arn:aws:iam::"$ACCOUNT_ID":role/역할 이름" >> ~/.aws/config
+    echo "role_arn = arn:aws:iam::"$ACCOUNT_ID":role/역할이름" >> ~/.aws/config
     echo "source_profile = mine" >> ~/.aws/config
 
     echo -e "\n""A# " $ACCOUNT_ID ": Define the credential setting as" $PROFILE "profile(~/.aws/config)."
