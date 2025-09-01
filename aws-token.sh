@@ -21,7 +21,7 @@ fi
 
 AWS_USER_PROFILE=mzc_solutions_architect
 AWS_2AUTH_PROFILE=mine
-ARN_OF_MFA=arn:aws:iam::$MY_AWS_ACCOUNT_ID:mfa/$1"@megazone.com"
+ARN_OF_MFA=arn:aws:iam::$MY_AWS_ACCOUNT_ID:mfa/$1"@sample.com"  ##수정필요
 MFA_TOKEN_CODE=$2
 DURATION=28800 #8시간 기준으로 설정하였음 #최대 값 36시간 129600 
 
