@@ -11,7 +11,7 @@ fi
 ACCOUNT_ID=$1
 PROFILE=$2
 
-REGISTRATION_CHECK_ACCOUNT=$(cat ~/.aws/config | grep "arn:aws:iam::"$ACCOUNT_ID":role/역할이름" | wc -l)
+REGISTRATION_CHECK_ACCOUNT=$(cat ~/.aws/config | grep "arn:aws:iam::"$ACCOUNT_ID":role/역할이름" | wc -l)  ##역할 이름을 넣어주세요
 REGISTRATION_CHECK_NICKNAME=$(cat ~/.aws/config | grep $PROFILE | wc -l)
 
 if [[ $REGISTRATION_CHECK_ACCOUNT -ge 1 ]]; then
