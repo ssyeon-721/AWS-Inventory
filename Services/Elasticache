@@ -1,0 +1,76 @@
+#!/bin/bash
+set -euo pipefail
+
+profile="프로필이름"                                 # 프로필 이름을 수정해줍니다.
+region="ap-northeast-2"
+outfile="elasticache_inventory_log.csv"              # 추출되는 파일 이름을 수정하고 싶다면 이곳에서 수정해줍니다.
+
+echo "No,AccountNumber,Region,Engine,shards,nodes,type,MEM,Multi-AZ,endpoint,SecurityGroup" >"$outfile"
+
+account_id=$(aws sts get-caller-identity --profile "$profile" --query Account --output text)
+
+idx=1
+
+# 1) Redis Replication Group
+aws elasticache describe-replication-groups \
+  --profile "$profile" --region "$region" \
+  --query 'ReplicationGroups[*].ReplicationGroupId' --output text | tr -d '\r' |
+while read -r rg_id; do
+  [[ -z "$rg_id" ]] && continue
+
+  read -r engine nodetype shards nodes multi c_ep p_ep sgs <<<"$(
+    aws elasticache describe-replication-groups \
+      --profile "$profile" --region "$region" --replication-group-id "$rg_id" \
+      --query '[ReplicationGroups[0].Engine,
+                ReplicationGroups[0].CacheNodeType,
+                length(ReplicationGroups[0].NodeGroups),
+                length(ReplicationGroups[0].NodeGroups[].NodeGroupMembers[]),
+                ReplicationGroups[0].AutomaticFailover,
+                ReplicationGroups[0].ConfigurationEndpoint.Address,
+                ReplicationGroups[0].NodeGroups[0].PrimaryEndpoint.Address,
+                join(`;`,ReplicationGroups[0].SecurityGroups[].SecurityGroupId)]' \
+      --output text | tr -d '\r'
+  )"
+
+  [[ "$multi" == "enabled" ]] && multi="true" || multi="false"
+  endpoint="$c_ep"; [[ "$endpoint" == "None" || -z "$endpoint" ]] && endpoint="$p_ep"
+  [[ "$endpoint" == "None" || -z "$endpoint" ]] && endpoint="-"
+  [[ "$sgs" == "None" || -z "$sgs" ]] && sgs="-"
+
+  printf '"%s","%s","%s","%s","%s","%s","%s","-","%s","%s","%s"\n' \
+    "$idx" "$account_id" "$region" "$engine" "$shards" "$nodes" "$nodetype" \
+    "$multi" "$endpoint" "$sgs" >>"$outfile"
+  idx=$((idx+1))
+done
+
+
+# 2) Memcached Cluster
+aws elasticache describe-cache-clusters \
+  --profile "$profile" --region "$region" --show-cache-node-info \
+  --query 'CacheClusters[?Engine==`memcached`].[CacheClusterId]' --output text | tr -d '\r' |
+while read -r cid; do
+  [[ -z "$cid" ]] && continue
+
+  read -r nodetype nodes azmode e1 e2 sgs <<<"$(
+    aws elasticache describe-cache-clusters \
+      --profile "$profile" --region "$region" --cache-cluster-id "$cid" --show-cache-node-info \
+      --query '[CacheClusters[0].CacheNodeType,
+                CacheClusters[0].NumCacheNodes,
+                CacheClusters[0].AZMode,
+                CacheClusters[0].ConfigurationEndpoint.Address,
+                CacheClusters[0].Endpoint.Address,
+                join(`;`,CacheClusters[0].SecurityGroups[].SecurityGroupId)]' \
+      --output text | tr -d '\r'
+  )"
+
+  multi="false"; [[ "$azmode" == "cross-az" ]] && multi="true"
+  endpoint="$e1"; [[ "$endpoint" == "None" || -z "$endpoint" ]] && endpoint="$e2"
+  [[ "$endpoint" == "None" || -z "$endpoint" ]] && endpoint="-"
+  [[ "$sgs" == "None" || -z "$sgs" ]] && sgs="-"
+
+  printf '"%s","%s","%s","memcached","-","%s","%s","-","%s","%s","%s"\n' \
+    "$idx" "$account_id" "$region" "$nodes" "$nodetype" "$multi" "$endpoint" "$sgs" >>"$outfile"
+  idx=$((idx+1))
+done
+
+echo "made $outfile"
