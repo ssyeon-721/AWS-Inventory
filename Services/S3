@@ -1,0 +1,65 @@
+#!/bin/bash
+set -euo pipefail                               # 오류·미정의 변수·파이프 실패 시 즉시 중단
+
+profile="프로필이름"                             # 프로필 이름을 입력합니다
+outfile="s3_inventory_log.csv"                   # 추출되는 파일이 이름을 변경하고 싶으면 이부분을 수정해줍니다 
+# ‑‑ region 변수는 필터용이 아니라 CW 메트릭·s3 ls 시 사용
+region="ap-northeast-2"
+
+echo "No,AccountNumber,Region,Bucket Name,CreationDate,PublicAccess,Bucket_Object_Cnt,Bucket_Size(MB),Poliy" \
+  > "$outfile"
+
+# 계정 ID
+account_id=$(aws sts get-caller-identity --profile "$profile" \
+             --query 'Account' --output text)
+
+idx=1
+# 1) 전체 버킷 목록 + 생성일
+aws s3api list-buckets --profile "$profile" \
+  --query 'Buckets[*].[Name,CreationDate]' --output text | tr -d '\r' |
+while IFS=$'\t' read -r bucket cdate; do
+  # 버킷 리전
+  b_region=$(aws s3api get-bucket-location --profile "$profile" \
+              --bucket "$bucket" --query 'LocationConstraint' --output text 2>/dev/null)
+  [[ "$b_region" == "None" || -z "$b_region" ]] && b_region="us-east-1"
+
+  # ── 같은 리전만 집계하려면 아래 주석 해제
+  # [[ "$b_region" != "$region" ]] && continue
+
+  # PublicAccess 판정: 정책 공개 여부 우선, 실패 시 ACL 확인
+  pub=$(aws s3api get-bucket-policy-status --profile "$profile" \
+         --bucket "$bucket" --query 'PolicyStatus.IsPublic' --output text 2>/dev/null || echo "-")
+  if [[ "$pub" == "-" || "$pub" == "None" ]]; then
+    acl_pub=$(aws s3api get-bucket-acl --profile "$profile" \
+              --bucket "$bucket" \
+              --query 'Grants[?Grantee.URI==`http://acs.amazonaws.com/groups/global/AllUsers`]' \
+              --output text 2>/dev/null)
+    [[ -n "$acl_pub" ]] && pub="true" || pub="false"
+  fi
+
+  # 버킷 정책 존재 여부
+  if aws s3api get-bucket-policy --profile "$profile" --bucket "$bucket" \
+       --output json >/dev/null 2>&1; then
+    has_policy="Yes"
+  else
+    has_policy="No"
+  fi
+
+  # 객체 수·사이즈(바이트) → MB
+  # 주의: 매우 큰 버킷은 시간이 오래 걸림
+  stats=$(aws s3 ls "s3://$bucket" --profile "$profile" \
+            --recursive --summarize 2>/dev/null | tail -2)
+  obj_cnt=$(echo "$stats" | grep -F "Total Objects:" | awk '{print $3}')
+  bytes=$(echo   "$stats" | grep -F "Total Size:"    | awk '{print $3}')
+  [[ -z "$obj_cnt" ]] && obj_cnt="0"
+  [[ -z "$bytes"   ]] && bytes="0"
+  size_mb=$(( (bytes + 1048575) / 1048576 ))        # MB 반올림
+
+  # CSV 출력
+  printf '"%s","%s","%s","%s","%s","%s","%s","%s","%s"\n' \
+    "$idx" "$account_id" "$b_region" "$bucket" "$cdate" "$pub" \
+    "$obj_cnt" "$size_mb" "$has_policy" >> "$outfile"
+  idx=$((idx+1))
+done
+
+echo "made $outfile"
