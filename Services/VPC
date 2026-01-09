@@ -1,0 +1,123 @@
+#!/bin/bash
+set -euo pipefail
+
+profile="프로필이름"   #프로필 이름을 수정해줍니다
+region="ap-northeast-2"
+outfile="vpc_full_inventory.csv"    ## 최종 출력되는 파일의 이름을 변경하고 싶다면 이곳을 수정합니다
+
+# 계정 ID
+account_id=$(aws sts get-caller-identity --profile "$profile" \
+             --query 'Account' --output text)
+
+
+# 1) VPC Information
+echo "VPC Information" > "$outfile"
+echo "AccountID,Region,Name,ID,CIDR,IsDefault" >> "$outfile"
+
+aws ec2 describe-vpcs \
+  --profile "$profile" --region "$region" \
+  --query 'Vpcs[*].[Tags[?Key==`Name`].Value|[0],VpcId,CidrBlock,IsDefault]' \
+  --output text | tr -d '\r' |
+while IFS=$'\t' read -r vpc_name vpc_id cidr is_def; do
+  [[ "$vpc_name" == "None" || -z "$vpc_name" ]] && vpc_name=""
+  printf '"%s","%s","%s","%s","%s","%s"\n' \
+    "$account_id" "$region" "$vpc_name" "$vpc_id" "$cidr" "$is_def" >> "$outfile"
+done
+
+printf '\n\n' >> "$outfile"
+
+
+# 2) Subnet Information
+echo "Subnet Information" >> "$outfile"
+echo "AccountID,VpcId,VpcName,CIDR" >> "$outfile"
+
+aws ec2 describe-subnets \
+  --profile "$profile" --region "$region" \
+  --query 'Subnets[*].[SubnetId,VpcId,CidrBlock]' \
+  --output text | tr -d '\r' |
+while IFS=$'\t' read -r subnet_id svpc_id scidr; do
+  vpc_name=$(aws ec2 describe-vpcs --profile "$profile" --region "$region" --vpc-ids "$svpc_id" \
+              --query 'Vpcs[0].Tags[?Key==`Name`].Value|[0]' --output text 2>/dev/null)
+  [[ "$vpc_name" == "None" || -z "$vpc_name" ]] && vpc_name=""
+  printf '"%s","%s","%s","%s"\n' \
+    "$account_id" "$svpc_id" "$vpc_name" "$scidr" >> "$outfile"
+done
+
+printf '\n\n' >> "$outfile"
+
+
+# 3) Network_interface_info
+echo "Network_interface_info" >> "$outfile"
+echo "AccountID,VpcId,RouteTableId,SubnetId,SubnetName,CIDR,AvailableIpAddressCount,AvailabilityZone,AvailabilityZoneId,AutoAssignPublicIp" >> "$outfile"
+
+aws ec2 describe-subnets \
+  --profile "$profile" --region "$region" \
+  --query 'Subnets[*].[SubnetId,VpcId,AvailabilityZone,AvailabilityZoneId,CidrBlock,AvailableIpAddressCount,MapPublicIpOnLaunch,Tags[?Key==`Name`].Value|[0]]' \
+  --output text | tr -d '\r' |
+while IFS=$'\t' read -r sid vid az azid cidr avail map_pub sname; do
+  [[ "$sname" == "None" || -z "$sname" ]] && sname=""
+  rt_id=$(aws ec2 describe-route-tables --profile "$profile" --region "$region" \
+            --filters "Name=association.subnet-id,Values=$sid" \
+            --query 'RouteTables[0].RouteTableId' --output text 2>/dev/null)
+  [[ "$rt_id" == "None" || -z "$rt_id" ]] && rt_id="-"
+  printf '"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s"\n' \
+    "$account_id" "$vid" "$rt_id" "$sid" "$sname" "$cidr" "$avail" "$az" "$azid" "$map_pub" >> "$outfile"
+done
+
+printf '\n\n' >> "$outfile"
+ 
+# 4) SG Rule Information  (Ingress / Egress 규칙 상세)
+echo "SG Rule Information" >> "$outfile"
+echo "No,AccountNumber,SgName,VpcId,SgId,Direct,IPProtocol,PortRange,Source,Description" >> "$outfile"
+
+idx=1
+aws ec2 describe-security-groups \
+  --profile "$profile" --region "$region" \
+  --query 'SecurityGroups[*].[GroupId,GroupName,VpcId]' \
+  --output text | tr -d '\r' |
+while IFS=$'\t' read -r sg_id sg_name vpc_id; do
+  [[ "$sg_name" == "None" || -z "$sg_name" ]] && sg_name=""
+  safe_name="${sg_name//\"/\"\"}"
+
+  for direction in IN OUT; do
+    if [[ "$direction" == "IN" ]]; then
+      perm_field="IpPermissions"
+    else
+      perm_field="IpPermissionsEgress"
+    fi
+
+    aws ec2 describe-security-groups \
+      --profile "$profile" --region "$region" --group-ids "$sg_id" \
+      --query "SecurityGroups[0].${perm_field}[*].[IpProtocol,FromPort,ToPort,IpRanges[0].CidrIp,Ipv6Ranges[0].CidrIpv6,UserIdGroupPairs[0].GroupId,PrefixListIds[0].PrefixListId,IpRanges[0].Description]" \
+      --output text | tr -d '\r' |
+    while IFS=$'\t' read -r proto fport tport ipv4 ipv6 sgsrc plsrc desc; do
+      [[ "$proto" == "-1" ]] && proto="ALL"
+
+      # Source 결정
+      src="-"
+      for cand in "$ipv4" "$ipv6" "$sgsrc" "$plsrc"; do
+        [[ -n "$cand" && "$cand" != "None" ]] && src="$cand" && break
+      done
+
+      # 포트 범위
+      if [[ "$proto" == "ALL" ]]; then
+        portrange="All"
+      elif [[ "$fport" == "None" || -z "$fport" ]]; then
+        portrange="-"
+      elif [[ "$fport" == "$tport" ]]; then
+        portrange="$fport"
+      else
+        portrange="${fport}-${tport}"
+      fi
+
+      [[ "$desc" == "None" || -z "$desc" ]] && desc=""
+      desc="${desc//\"/\"\"}"
+
+      printf '"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s"\n' \
+        "$idx" "$account_id" "$safe_name" "$vpc_id" "$sg_id" "$direction" "$proto" "$portrange" "$src" "$desc" >> "$outfile"
+      idx=$((idx+1))
+    done
+  done
+done
+
+echo "made $outfile"
