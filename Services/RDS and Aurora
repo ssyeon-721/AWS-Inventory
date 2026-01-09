@@ -1,0 +1,52 @@
+#!/bin/bash
+set -euo pipefail                           # 오류·미정의 변수·파이프 실패 시 즉시 중단
+
+profile="프로필이름"                        # 프로필 이름을 넣어줍니다
+region="ap-northeast-2"
+outfile="rds_inventory_log.csv"             # 출력할 파일 이름을 변경하고 싶으면 여기서 변경합니다.  
+
+echo "No,AccountNumber,Name,DBEngine,Type,CreateDate,Storage,Multi-AZ,Public,ID,Security Group" > "$outfile"
+
+# 계정 ID
+account_id=$(aws sts get-caller-identity --profile "$profile" \
+             --query 'Account' --output text)
+
+idx=1
+
+# 1) 개별 DB 인스턴스 수집
+aws rds describe-db-instances \
+  --profile "$profile" --region "$region" \
+  --query 'DBInstances[*].[DBInstanceIdentifier,Engine,DBInstanceClass,InstanceCreateTime,AllocatedStorage,MultiAZ,PubliclyAccessible,DBInstanceArn,VpcSecurityGroups[0].VpcSecurityGroupId]' \
+  --output text | tr -d '\r' |
+while IFS=$'\t' read -r name engine inst_type ctime storage multi pub arn sg; do
+  [[ "$storage" == "None" ]] && storage="-"
+  [[ "$multi"   == "True" ]] && multi="true" || multi="false"
+  [[ "$pub"     == "True" ]] && pub="true" || pub="false"
+  [[ "$sg"      == "None" || -z "$sg" ]] && sg="-"
+
+  printf '"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s"\n' \
+    "$idx" "$account_id" "$name" "$engine" "$inst_type" "$ctime" "$storage" \
+    "$multi" "$pub" "$arn" "$sg" >> "$outfile"
+  idx=$((idx+1))
+done
+
+
+# 2) Aurora 클러스터 수집
+aws rds describe-db-clusters \
+  --profile "$profile" --region "$region" \
+  --query 'DBClusters[*].[DBClusterIdentifier,Engine,EngineMode,ClusterCreateTime,AllocatedStorage,MultiAZ,PubliclyAccessible,DBClusterArn,VpcSecurityGroups[0].VpcSecurityGroupId]' \
+  --output text | tr -d '\r' |
+while IFS=$'\t' read -r name engine mode ctime storage multi pub arn sg; do
+  [[ "$storage" == "None" || -z "$storage" ]] && storage="-"
+  [[ "$multi"   == "True" ]] && multi="true" || multi="false"
+  [[ "$pub"     == "True" ]] && pub="true" || pub="false"
+  [[ "$sg"      == "None" || -z "$sg" ]] && sg="-"
+  [[ "$mode"    == "provisioned" || "$mode" == "parallelquery" || "$mode" == "serverless" ]] || mode="cluster"
+
+  printf '"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s"\n' \
+    "$idx" "$account_id" "$name" "$engine" "$mode" "$ctime" "$storage" \
+    "$multi" "$pub" "$arn" "$sg" >> "$outfile"
+  idx=$((idx+1))
+done
+
+echo "made $outfile"
