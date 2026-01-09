@@ -1,0 +1,97 @@
+#!/bin/bash
+set -euo pipefail                 # 예외·미정의 변수·파이프 오류 시 즉시 중단
+
+profile="프로파일 이름"    ##프로파일 이름을 입력합니다
+region="ap-northeast-2"
+outfile="ec2_inventory_log.csv"   ## 최종 추출되는 파일의 이름을 변경하고 싶다면 이부분을 수정합니다
+
+# 공백 2행을 간단히 찍는 함수
+gap() { printf '\n\n'; }
+
+# 계정 ID
+acct=$(aws sts get-caller-identity --profile "$profile" \
+        --query 'Account' --output text)
+
+
+# 1) Instance Information
+{
+  printf "Instance Information\n"
+  printf "Account Number,Region,Name,Instance ID,Type,LaunchTime,Status,VPC,Subnet,Key Pair,Security Group,IAM Role,PublicIp,PrivateIp\n"
+
+  aws ec2 describe-instances \
+    --profile "$profile" --region "$region" \
+    --query 'Reservations[].Instances[].[InstanceId,Tags[?Key==`Name`].Value|[0],InstanceType,LaunchTime,State.Name,VpcId,SubnetId,KeyName,SecurityGroups[0].GroupId,IamInstanceProfile.Arn,PublicIpAddress,PrivateIpAddress]' \
+    --output text | tr -d '\r' |
+  while IFS=$'\t' read -r iid name itype ltime state vid sid key sg iam pubip privip; do
+    [[ "$name"  == "None" || -z "$name" ]] && name=""
+    [[ "$key"   == "None" ]] && key="-"
+    [[ "$sg"    == "None" ]] && sg="-"
+    [[ "$iam"   == "None" ]] && iam="-"
+    [[ "$pubip" == "None" ]] && pubip="-"
+    name="${name//\"/\"\"}"                # 따옴표 이스케이프
+    printf '"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s"\n' \
+      "$acct" "$region" "$name" "$iid" "$itype" "$ltime" "$state" "$vid" "$sid" "$key" "$sg" "$iam" "$pubip" "$privip"
+  done
+
+  gap
+
+
+# 2) EBS Information
+  printf "EBS Information\n"
+  printf "Account Number,RegionName,EBS ID,Type,LaunchTime,Status,Iops,Encrypted,KmsKeyId,Attach_InstanceId\n"
+
+  aws ec2 describe-volumes \
+    --profile "$profile" --region "$region" \
+    --query 'Volumes[*].[VolumeId,VolumeType,CreateTime,State,Iops,Encrypted,KmsKeyId,Attachments[0].InstanceId]' \
+    --output text | tr -d '\r' |
+  while IFS=$'\t' read -r vid vtype ctime vstate iops enc kms iid; do
+    [[ "$kms" == "None" ]] && kms="-"
+    [[ "$iid" == "None" ]] && iid="-"
+    printf '"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s"\n' \
+      "$acct" "$region" "$vid" "$vtype" "$ctime" "$vstate" "$iops" "$enc" "$kms" "$iid"
+  done
+
+  gap
+
+
+# 3) ELB Information
+  printf "ELB Information\n"
+  printf "Account Number,Region,ELB Name,ELB Type,Scheme,Status,DNS Name,VPC ID,SecurityGroups\n"
+
+  aws elbv2 describe-load-balancers \
+    --profile "$profile" --region "$region" \
+    --query 'LoadBalancers[*].[LoadBalancerName,Type,Scheme,State.Code,DNSName,VpcId,SecurityGroups[0]]' \
+    --output text | tr -d '\r' |
+  while IFS=$'\t' read -r lbname lbtype scheme lbstat dns vpcid lsg; do
+    [[ "$lsg" == "None" ]] && lsg="-"
+    printf '"%s","%s","%s","%s","%s","%s","%s","%s","%s"\n' \
+      "$acct" "$region" "$lbname" "$lbtype" "$scheme" "$lbstat" "$dns" "$vpcid" "$lsg"
+  done
+
+  gap
+
+
+# 4) ELB Listener Information
+  printf "ELB Listener Information\n"
+  printf "Account Number,Region,ELB Name,Port,Protocol,Certificates,action_type,TargetGroupArn,target_order,Item1,Item2,Item3,Item4,Item5\n"
+
+  aws elbv2 describe-load-balancers \
+    --profile "$profile" --region "$region" \
+    --query 'LoadBalancers[*].[LoadBalancerArn,LoadBalancerName]' \
+    --output text | tr -d '\r' |
+  while IFS=$'\t' read -r lbarn lbname; do
+    aws elbv2 describe-listeners \
+      --load-balancer-arn "$lbarn" --profile "$profile" --region "$region" \
+      --query 'Listeners[*].[Port,Protocol,Certificates[0].CertificateArn,DefaultActions[0].Type,DefaultActions[0].TargetGroupArn,DefaultActions[0].Order]' \
+      --output text | tr -d '\r' |
+    while IFS=$'\t' read -r port proto cert act_type tgarn order; do
+      [[ "$cert"  == "None" || -z "$cert"  ]] && cert="-"
+      [[ "$tgarn" == "None" || -z "$tgarn" ]] && tgarn="-"
+      [[ "$order" == "None" || -z "$order" ]] && order="-"
+      printf '"%s","%s","%s","%s","%s","%s","%s","%s","%s","-","-","-","-","-"\n' \
+        "$acct" "$region" "$lbname" "$port" "$proto" "$cert" "$act_type" "$tgarn" "$order"
+    done
+  done
+} > "$outfile"
+
+echo "made $outfile"
