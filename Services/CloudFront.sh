@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-profile="2bytes"
-outfile="cloudfront_full_inventory.csv"
+profile="프로파일"  #프로파일 이름을 넣어줍니다. 
+outfile="cloudfront_full_inventory.csv"  #파일 이름을 변경하고 싶으면 여기서 변경해줍니다
 
 command -v aws >/dev/null 2>&1 || { echo "ERROR: aws cli not found"; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 not found"; exit 1; }
@@ -124,3 +124,4 @@ aws cloudfront list-distributions \
 | python3 -c "$py_parse" "$account_id" "$outfile"
 
 echo "made $outfile"
+
