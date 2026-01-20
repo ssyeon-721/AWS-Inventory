@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-profile="2bytes"
-outfile="APIgateway_inventory.csv"
-regions=("ap-northeast-2" "us-east-1")
+profile="프로파일"  #프로파일 이름을 넣어줍니다
+outfile="APIgateway_inventory.csv"  #파일명 변경을 원하면 여기서 변경해줍니다 
+regions=("ap-northeast-2" "us-east-1")  # 리전은 서울리전으로 설정되어 있습니다
 
 command -v aws >/dev/null 2>&1 || { echo "ERROR: aws cli not found"; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 not found (required for jq-less json parsing)"; exit 1; }
@@ -149,3 +149,4 @@ for region in "${regions[@]}"; do
 done
 
 echo "made $outfile"
+
