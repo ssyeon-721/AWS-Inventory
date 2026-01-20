@@ -18,6 +18,7 @@ AWS Resource Inventory Scripts
 
 이 저장소는 위 요구를 만족하기 위해 만들어졌습니다.
 
+-
 
 🏗️ 설계 원칙
 1. jq 미사용
