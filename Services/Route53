@@ -1,0 +1,95 @@
+#!/bin/bash
+set -euo pipefail
+
+profile="프로파일"   #프로파일 이름을 넣어줍니다
+# ACM 인증서는 us‑east‑1 리전에 상주(글로벌). Route53 API는 리전 매개변수無
+acm_region="us-east-1"
+outfile="route53_inventory.csv"  #파일명 변경하고 싶다면 여기서 변경해줍니다
+
+acct=$(aws sts get-caller-identity --profile "$profile" \
+          --query Account --output text)
+
+
+# 1) ACM Information
+echo "ACM Information" > "$outfile"
+echo "Account Number,Region,Domain,Issued at,Not after,Validation Method,Identifier Name,Value,ARN" >> "$outfile"
+
+aws acm list-certificates \
+  --profile "$profile" --region "$acm_region" \
+  --query 'CertificateSummaryList[*].CertificateArn' --output text |
+tr '\t' '\n' | grep '^arn:' | while read -r cert_arn; do
+  read -r domain issued notafter vmethod idname idvalue <<<"$(
+    aws acm describe-certificate --profile "$profile" --region "$acm_region" \
+      --certificate-arn "$cert_arn" \
+      --query '[Certificate.DomainName,Certificate.IssuedAt,Certificate.NotAfter,Certificate.DomainValidationOptions[0].ValidationMethod,Certificate.DomainValidationOptions[0].ResourceRecord.Name,Certificate.DomainValidationOptions[0].ResourceRecord.Value]' \
+      --output text | tr -d '\r'
+  )"
+
+  [[ "$idname"  == "None" ]] && idname="-"
+  [[ "$idvalue" == "None" ]] && idvalue="-"
+
+  printf '"%s","%s","%s","%s","%s","%s","%s","%s","%s"\n' \
+    "$acct" "$acm_region" "$domain" "$issued" "$notafter" "$vmethod" "$idname" "$idvalue" "$cert_arn" >> "$outfile"
+done
+
+printf '\n\n' >> "$outfile"
+
+
+# 2) Route53 HostZones Information
+echo "Route53 HostZones Information" >> "$outfile"
+echo "Domain Name,Account Number,Type,Hosted Zone ID" >> "$outfile"
+
+aws route53 list-hosted-zones --profile "$profile" \
+  --query 'HostedZones[*].[Name,Id,Config.PrivateZone]' --output text |
+tr -d '\r' | while IFS=$'\t' read -r zname zid priv; do
+  zname="${zname%.}"                 # 끝 점(.) 제거
+  type="PUBLIC"; [[ "$priv" == "True" ]] && type="PRIVATE"
+  printf '"%s","%s","%s","%s"\n' \
+    "$zname" "$acct" "$type" "${zid##*/}" >> "$outfile"
+done
+
+printf '\n\n' >> "$outfile"
+
+
+# 3) Records Information
+echo "Records Information" >> "$outfile"
+echo "Domain Name,Account Number,Record Name,Type,Routing Policy,Differentiator,Alias,Value/Route traffic To,TTL" >> "$outfile"
+
+aws route53 list-hosted-zones --profile "$profile" \
+  --query 'HostedZones[*].[Id,Name]' --output text | tr -d '\r' |
+while IFS=$'\t' read -r zid zname; do
+  zname="${zname%.}"
+  zid_short=${zid##*/}
+
+  aws route53 list-resource-record-sets --hosted-zone-id "$zid_short" \
+    --profile "$profile" \
+    --query 'ResourceRecordSets[*].[Name,Type,SetIdentifier,AliasTarget.DNSName,ResourceRecords[0].Value,TTL,Weight,Failover,GeoLocation.CountryCode,Latency]' \
+    --output text | tr -d '\r' |
+  while IFS=$'\t' read -r rname rtype rid aliasdns rvalue ttl weight failover geo lat; do
+      rname="${rname%.}"
+
+      # Routing Policy 결정
+      if [[ "$weight" != "None" ]]; then policy="WEIGHTED"
+      elif [[ "$failover" != "None" ]]; then policy="FAILOVER"
+      elif [[ "$geo" != "None" ]]; then policy="GEO"
+      elif [[ "$lat" != "None" ]]; then policy="LATENCY"
+      else policy="SIMPLE"
+      fi
+
+      # Alias / Value 구분
+      alias="NO"; value="$rvalue"
+      if [[ "$aliasdns" != "None" ]]; then
+        alias="YES"
+        value="$aliasdns"
+        ttl="-"
+      fi
+
+      [[ "$rid"  == "None" ]] && rid="-"
+      [[ "$ttl"  == "None" ]] && ttl="-"
+
+      printf '"%s","%s","%s","%s","%s","%s","%s","%s","%s"\n' \
+        "$zname" "$acct" "$rname" "$rtype" "$policy" "$rid" "$alias" "$value" "$ttl" >> "$outfile"
+  done
+done
+
+echo "made $outfile"
