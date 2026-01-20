@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-profile="2bytes"
-outfile="acm_inventory.csv"
+profile="프로파일"  #프로파일 이름을 넣어줍니다
+outfile="acm_inventory.csv"  # 파일명 변경을 원하면 여기서 변경해줍니다
 regions=("ap-northeast-2" "us-east-1")
 
 # ---- precheck ----
@@ -123,3 +123,4 @@ for region in "${regions[@]}"; do
 done
 
 echo "made $outfile"
+
